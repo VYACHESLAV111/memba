@@ -152,6 +152,112 @@ server.registerTool(
     };
   }
 );
+// ── Tool: Elaris Realm Snapshot ─────────────────────────────
+
+server.registerTool(
+  "elaris_get_realm_snapshot",
+  {
+    description:
+      "Create a read-only snapshot of a Gno realm for Elaris/JARVIS. " +
+      "Returns the realm render output, RPC endpoint, chain ID, latest block height, " +
+      "block timestamp, and local check timestamp.",
+    inputSchema: {
+      realm_path: z
+        .string()
+        .min(1)
+        .describe('Gno realm path, e.g. "gno.land/r/gov/dao"'),
+      path: z
+        .string()
+        .default("")
+        .describe("Optional Render path argument"),
+    },
+  },
+  async ({ realm_path, path }) => {
+    const rpcUrl = getRpcUrl();
+    const checkedAt = new Date().toISOString();
+
+    try {
+      const result = await queryRender(realm_path, path || "");
+
+      if (!result) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: false,
+              realm_path,
+              rpc_url: rpcUrl,
+              checked_at: checkedAt,
+              error: "No response from realm or RPC",
+            }, null, 2),
+          }],
+          isError: true,
+        };
+      }
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10_000);
+
+      let statusJson: any;
+      try {
+        const response = await fetch(rpcUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "status",
+            params: {},
+          }),
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error(`RPC status returned HTTP ${response.status}`);
+        }
+
+        statusJson = await response.json();
+      } finally {
+        clearTimeout(timer);
+      }
+
+      const nodeInfo = statusJson?.result?.node_info;
+      const syncInfo = statusJson?.result?.sync_info;
+
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            success: true,
+            network: nodeInfo?.network ?? null,
+            rpc_url: rpcUrl,
+            realm_path,
+            render_path: path || "",
+            checked_at: checkedAt,
+            latest_block_height: syncInfo?.latest_block_height ?? null,
+            latest_block_time: syncInfo?.latest_block_time ?? null,
+            catching_up: syncInfo?.catching_up ?? null,
+            result,
+          }, null, 2),
+        }],
+      };
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify({
+            success: false,
+            realm_path,
+            rpc_url: rpcUrl,
+            checked_at: checkedAt,
+            error: error instanceof Error ? error.message : String(error),
+          }, null, 2),
+        }],
+        isError: true,
+      };
+    }
+  }
+);
 
 // ── Tool: Get Proposal ──────────────────────────────────────
 
